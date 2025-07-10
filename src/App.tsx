@@ -66,6 +66,8 @@ function App() {
       setError('');
       
       console.log('Loading data from Supabase...');
+      console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
+      console.log('Supabase Key exists:', !!import.meta.env.VITE_SUPABASE_ANON_KEY);
       
       // Load socios first
       const sociosData = await sociosService.getAll();

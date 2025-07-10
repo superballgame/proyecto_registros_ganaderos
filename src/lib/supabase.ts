@@ -3,8 +3,16 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+console.log('Supabase configuration:', {
+  url: supabaseUrl ? 'Set' : 'Missing',
+  key: supabaseAnonKey ? 'Set' : 'Missing'
+});
 if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables');
+  console.error('Missing Supabase environment variables:', {
+    VITE_SUPABASE_URL: supabaseUrl,
+    VITE_SUPABASE_ANON_KEY: supabaseAnonKey ? '[HIDDEN]' : 'undefined'
+  });
+  throw new Error('Missing Supabase environment variables. Please check your .env file.');
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -79,6 +87,7 @@ export const causaSalidaLabels: Record<CausaSalida, string> = {
 export const sociosService = {
   async getAll() {
     try {
+      console.log('Fetching socios from Supabase...');
       const { data, error } = await supabase
         .from('socios')
         .select('*')
@@ -86,9 +95,10 @@ export const sociosService = {
         .order('nombre');
       
       if (error) {
-        console.error('Error fetching socios:', error);
+        console.error('Error fetching socios:', error.message, error.details);
         throw error;
       }
+      console.log('Socios fetched successfully:', data?.length || 0);
       return data as Socio[];
     } catch (error) {
       console.error('Error in sociosService.getAll:', error);
@@ -123,6 +133,7 @@ export const sociosService = {
 export const registrosService = {
   async getAll() {
     try {
+      console.log('Fetching registros from Supabase...');
       // First try to get from registros_ganaderos (new table)
       const { data: registrosGanaderos, error: errorGanaderos } = await supabase
         .from('registros_ganaderos')
@@ -133,9 +144,11 @@ export const registrosService = {
         .order('fecha', { ascending: false });
       
       if (!errorGanaderos && registrosGanaderos && registrosGanaderos.length > 0) {
+        console.log('Registros ganaderos fetched successfully:', registrosGanaderos.length);
         return registrosGanaderos as RegistroGanadero[];
       }
 
+      console.log('registros_ganaderos not available or empty, trying legacy table...');
       // Fallback to legacy registros table
       const { data: registrosLegacy, error: errorLegacy } = await supabase
         .from('registros')
@@ -143,10 +156,11 @@ export const registrosService = {
         .order('fecha', { ascending: false });
       
       if (errorLegacy) {
-        console.error('Error fetching registros:', errorLegacy);
+        console.error('Error fetching registros:', errorLegacy.message, errorLegacy.details);
         throw errorLegacy;
       }
 
+      console.log('Legacy registros fetched:', registrosLegacy?.length || 0);
       // Convert legacy format to new format
       const convertedRegistros: RegistroGanadero[] = [];
       
@@ -182,6 +196,7 @@ export const registrosService = {
         }
       }
 
+      console.log('Converted registros:', convertedRegistros.length);
       return convertedRegistros;
     } catch (error) {
       console.error('Error in registrosService.getAll:', error);

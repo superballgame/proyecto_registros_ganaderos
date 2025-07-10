@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Calculator, Save, BarChart3, AlertCircle, Search, Users, Calendar, Trash2, Edit3, Check, X, Eye, UserPlus } from 'lucide-react';
-import { supabase, RegistroGanadero, SalidaDetalle, Socio, sociosService, registrosService } from './lib/supabase';
+import { supabase, RegistroGanadero, SalidaDetalle, Socio, Registro, sociosService, registrosService } from './lib/supabase';
 import ExitReasonsModal, { ExitReasonEntry } from './components/ExitReasonsModal';
 import ExitDetailsModal from './components/ExitDetailsModal';
 
 function App() {
-  const [registros, setRegistros] = useState<RegistroGanadero[]>([]);
+  const [registros, setRegistros] = useState<(RegistroGanadero | Registro)[]>([]);
   const [socios, setSocios] = useState<Socio[]>([]);
   const [formData, setFormData] = useState({
     socio: '',
@@ -63,14 +63,18 @@ function App() {
   const loadData = async () => {
     try {
       setLoading(true);
+      setError('');
       
-      // Load socios and registros in parallel
-      const [sociosData, registrosData] = await Promise.all([
-        sociosService.getAll(),
-        registrosService.getAll()
-      ]);
-
+      console.log('Loading data from Supabase...');
+      
+      // Load socios first
+      const sociosData = await sociosService.getAll();
+      console.log('Socios loaded:', sociosData.length);
       setSocios(sociosData);
+
+      // Load registros
+      const registrosData = await registrosService.getAll();
+      console.log('Registros loaded:', registrosData.length);
       
       // Recalculate all registros
       const registrosRecalculados = await recalcularTodosLosRegistros(registrosData);
@@ -78,7 +82,9 @@ function App() {
 
       // Select first socio if none selected
       if (registrosRecalculados.length > 0 && !socioSeleccionado) {
-        const primerSocio = registrosRecalculados[0].socio_id;
+        const primerRegistro = registrosRecalculados[0];
+        const primerSocio = 'socio_id' in primerRegistro ? primerRegistro.socio_id : 
+                           sociosData.find(s => s.nombre === (primerRegistro as Registro).socio)?.id;
         setSocioSeleccionado(primerSocio);
       }
     } catch (error) {
@@ -89,14 +95,19 @@ function App() {
     }
   };
 
-  const recalcularTodosLosRegistros = async (registrosOriginales: RegistroGanadero[]) => {
+  const recalcularTodosLosRegistros = async (registrosOriginales: (RegistroGanadero | Registro)[]) => {
     const registrosRecalculados = [];
     
     for (const registro of registrosOriginales) {
       // Count entries for same socio on same date
-      const entradasMismaFecha = registrosOriginales.filter(r => 
-        r.socio_id === registro.socio_id && r.fecha === registro.fecha
-      ).length;
+      const entradasMismaFecha = registrosOriginales.filter(r => {
+        if ('socio_id' in registro && 'socio_id' in r) {
+          return r.socio_id === registro.socio_id && r.fecha === registro.fecha;
+        } else if ('socio' in registro && 'socio' in r) {
+          return r.socio === registro.socio && r.fecha === registro.fecha;
+        }
+        return false;
+      }).length;
 
       // Recalculate total with correct divisor
       const nuevoTotal = (registro.kg_totales * registro.vr_kilo) + (registro.fletes / entradasMismaFecha);
@@ -118,14 +129,25 @@ function App() {
 
       // Update in database
       try {
-        await supabase
-          .from('registros_ganaderos')
-          .update({
-            saldo: nuevoSaldo,
-            total: nuevoTotal,
-            valor_animal: nuevoValorAnimal
-          })
-          .eq('id', registro.id);
+        if ('socio_id' in registro) {
+          await supabase
+            .from('registros_ganaderos')
+            .update({
+              saldo: nuevoSaldo,
+              total: nuevoTotal,
+              valor_animal: nuevoValorAnimal
+            })
+            .eq('id', registro.id);
+        } else {
+          await supabase
+            .from('registros')
+            .update({
+              saldo: nuevoSaldo,
+              total: nuevoTotal,
+              valor_animal: nuevoValorAnimal
+            })
+            .eq('id', registro.id);
+        }
       } catch (error) {
         console.error('Error updating registro:', error);
       }
@@ -137,9 +159,16 @@ function App() {
   const contarEntradasPorSocioYFecha = (socioId: string, fecha: string) => {
     if (!socioId || !fecha) return 1;
     
-    const count = registros.filter(registro => 
-      registro && registro.socio_id === socioId && registro.fecha === fecha
-    ).length;
+    const count = registros.filter(registro => {
+      if (!registro) return false;
+      
+      if ('socio_id' in registro) {
+        return registro.socio_id === socioId && registro.fecha === fecha;
+      } else {
+        const socio = socios.find(s => s.id === socioId);
+        return socio && registro.socio === socio.nombre && registro.fecha === fecha;
+      }
+    }).length;
     
     return count + 1;
   };
@@ -433,9 +462,16 @@ function App() {
   const socioSeleccionadoData = socios.find(s => s.id === socioSeleccionado);
 
   // Filter records for selected socio
-  const registrosDelSocio = registros.filter(registro => 
-    registro && registro.socio_id === socioSeleccionado
-  ).sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+  const registrosDelSocio = registros.filter(registro => {
+    if (!registro) return false;
+    
+    if ('socio_id' in registro) {
+      return registro.socio_id === socioSeleccionado;
+    } else {
+      const socio = socios.find(s => s.id === socioSeleccionado);
+      return socio && registro.socio === socio.nombre;
+    }
+  }).sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
 
   // Statistics for selected socio
   const estadisticasDelSocio = {
@@ -829,9 +865,16 @@ function App() {
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-100">
                       {registrosDelSocio.map((registro) => {
-                        const entradasMismaFecha = registros.filter(r => 
-                          r && r.socio_id === registro.socio_id && r.fecha === registro.fecha
-                        ).length;
+                        const entradasMismaFecha = registros.filter(r => {
+                          if (!r) return false;
+                          
+                          if ('socio_id' in registro && 'socio_id' in r) {
+                            return r.socio_id === registro.socio_id && r.fecha === registro.fecha;
+                          } else if ('socio' in registro && 'socio' in r) {
+                            return r.socio === registro.socio && r.fecha === registro.fecha;
+                          }
+                          return false;
+                        }).length;
                         
                         const isEditing = editingId === registro.id;
                         
@@ -1024,7 +1067,8 @@ function App() {
         onClose={() => setShowExitReasonsModal(false)}
         onSave={handleExitReasonsSave}
         totalExits={selectedRegistroForExits?.salidas || 0}
-        socio={selectedRegistroForExits?.socio?.nombre || ''}
+        socio={selectedRegistroForExits?.socio?.nombre || 
+               ('socio' in (selectedRegistroForExits || {}) ? (selectedRegistroForExits as Registro).socio : '')}
         fecha={selectedRegistroForExits?.fecha || ''}
         registroId={selectedRegistroForExits?.id}
       />
@@ -1033,7 +1077,8 @@ function App() {
         isOpen={showExitDetailsModal}
         onClose={() => setShowExitDetailsModal(false)}
         exitDetails={selectedExitDetails}
-        socio={selectedRegistroForExits?.socio?.nombre || ''}
+        socio={selectedRegistroForExits?.socio?.nombre || 
+               ('socio' in (selectedRegistroForExits || {}) ? (selectedRegistroForExits as Registro).socio : '')}
         fecha={selectedRegistroForExits?.fecha || ''}
         totalExits={selectedRegistroForExits?.salidas || 0}
       />

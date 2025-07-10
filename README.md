@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Registros Ganaderos
 
 Sistema de control de inventario y cálculo de valores para registro ganadero por socios.
@@ -122,3 +123,6 @@ Asegúrate de configurar estas variables en tu panel de Netlify:
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT.
+=======
+# proyecto_registros_ganaderos
+>>>>>>> 4f57659fdbcf04655a734f61f60b7fbef46150e8

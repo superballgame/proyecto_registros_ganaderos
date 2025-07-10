@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, Save, BarChart3, AlertCircle, Search, Users, Calendar, Trash2, Edit3, Check, X, Eye } from 'lucide-react';
-import { supabase, Registro, SalidaDetalle } from './lib/supabase';
+import { Calculator, Save, BarChart3, AlertCircle, Search, Users, Calendar, Trash2, Edit3, Check, X, Eye, UserPlus } from 'lucide-react';
+import { supabase, RegistroGanadero, SalidaDetalle, Socio, sociosService, registrosService } from './lib/supabase';
 import ExitReasonsModal, { ExitReasonEntry } from './components/ExitReasonsModal';
 import ExitDetailsModal from './components/ExitDetailsModal';
 
 function App() {
-  const [registros, setRegistros] = useState<Registro[]>([]);
+  const [registros, setRegistros] = useState<RegistroGanadero[]>([]);
+  const [socios, setSocios] = useState<Socio[]>([]);
   const [formData, setFormData] = useState({
     socio: '',
     fecha: '',
@@ -25,7 +26,7 @@ function App() {
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [socioSeleccionado, setSocioSeleccionado] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingData, setEditingData] = useState<Partial<Registro>>({});
+  const [editingData, setEditingData] = useState<Partial<RegistroGanadero>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   
@@ -33,7 +34,16 @@ function App() {
   const [showExitReasonsModal, setShowExitReasonsModal] = useState(false);
   const [showExitDetailsModal, setShowExitDetailsModal] = useState(false);
   const [selectedExitDetails, setSelectedExitDetails] = useState<SalidaDetalle[]>([]);
-  const [selectedRegistroForExits, setSelectedRegistroForExits] = useState<Registro | null>(null);
+  const [selectedRegistroForExits, setSelectedRegistroForExits] = useState<RegistroGanadero | null>(null);
+
+  // New socio modal
+  const [showNewSocioModal, setShowNewSocioModal] = useState(false);
+  const [newSocioData, setNewSocioData] = useState({
+    nombre: '',
+    telefono: '',
+    email: '',
+    direccion: ''
+  });
 
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
@@ -42,7 +52,7 @@ function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    loadRegistros();
+    loadData();
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -50,65 +60,51 @@ function App() {
     };
   }, []);
 
-  const loadRegistros = async () => {
+  const loadData = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('registros')
-        .select('*')
-        .order('fecha', { ascending: false });
+      
+      // Load socios and registros in parallel
+      const [sociosData, registrosData] = await Promise.all([
+        sociosService.getAll(),
+        registrosService.getAll()
+      ]);
 
-      if (error) throw error;
-
-      const registrosConvertidos = data.map(registro => ({
-        ...registro,
-        id: registro.id,
-        socio: registro.socio,
-        fecha: registro.fecha,
-        entradas: registro.entradas || 0,
-        salidas: registro.salidas || 0,
-        saldo: registro.saldo || 0,
-        kg_totales: registro.kg_totales || 0,
-        vr_kilo: registro.vr_kilo || 0,
-        fletes: registro.fletes || 0,
-        comision: registro.comision || 0,
-        valor_animal: registro.valor_animal || 0,
-        total: registro.total || 0
-      }));
-
-      // Recalcular todos los registros
-      const registrosRecalculados = await recalcularTodosLosRegistros(registrosConvertidos);
+      setSocios(sociosData);
+      
+      // Recalculate all registros
+      const registrosRecalculados = await recalcularTodosLosRegistros(registrosData);
       setRegistros(registrosRecalculados);
 
-      // Seleccionar el primer socio si no hay uno seleccionado
+      // Select first socio if none selected
       if (registrosRecalculados.length > 0 && !socioSeleccionado) {
-        const primerSocio = registrosRecalculados[0].socio;
+        const primerSocio = registrosRecalculados[0].socio_id;
         setSocioSeleccionado(primerSocio);
       }
     } catch (error) {
-      console.error('Error loading registros:', error);
-      setError('Error al cargar los registros');
+      console.error('Error loading data:', error);
+      setError('Error al cargar los datos');
     } finally {
       setLoading(false);
     }
   };
 
-  const recalcularTodosLosRegistros = async (registrosOriginales: Registro[]) => {
+  const recalcularTodosLosRegistros = async (registrosOriginales: RegistroGanadero[]) => {
     const registrosRecalculados = [];
     
     for (const registro of registrosOriginales) {
-      // Contar cuántas entradas tiene el mismo socio en la misma fecha
+      // Count entries for same socio on same date
       const entradasMismaFecha = registrosOriginales.filter(r => 
-        r.socio === registro.socio && r.fecha === registro.fecha
+        r.socio_id === registro.socio_id && r.fecha === registro.fecha
       ).length;
 
-      // Recalcular el total con el divisor correcto
+      // Recalculate total with correct divisor
       const nuevoTotal = (registro.kg_totales * registro.vr_kilo) + (registro.fletes / entradasMismaFecha);
       
-      // Recalcular valor por animal
+      // Recalculate value per animal
       const nuevoValorAnimal = registro.entradas > 0 ? nuevoTotal / registro.entradas : 0;
 
-      // Recalcular saldo
+      // Recalculate balance
       const nuevoSaldo = registro.entradas - registro.salidas;
 
       const registroRecalculado = {
@@ -120,10 +116,10 @@ function App() {
 
       registrosRecalculados.push(registroRecalculado);
 
-      // Actualizar en la base de datos
+      // Update in database
       try {
         await supabase
-          .from('registros')
+          .from('registros_ganaderos')
           .update({
             saldo: nuevoSaldo,
             total: nuevoTotal,
@@ -138,11 +134,11 @@ function App() {
     return registrosRecalculados;
   };
 
-  const contarEntradasPorSocioYFecha = (socio: string, fecha: string) => {
-    if (!socio || !fecha) return 1;
+  const contarEntradasPorSocioYFecha = (socioId: string, fecha: string) => {
+    if (!socioId || !fecha) return 1;
     
     const count = registros.filter(registro => 
-      registro && registro.socio && registro.socio === socio && registro.fecha === fecha
+      registro && registro.socio_id === socioId && registro.fecha === fecha
     ).length;
     
     return count + 1;
@@ -190,7 +186,7 @@ function App() {
     calcularResultados();
   }, [formData, registros]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
@@ -205,11 +201,12 @@ function App() {
       salidas: value
     }));
 
-    // Si hay salidas, mostrar el modal para especificar las causas
+    // If there are exits, show modal to specify causes
     if (parseInt(value) > 0) {
+      const selectedSocio = socios.find(s => s.id === formData.socio);
       setSelectedRegistroForExits({
         id: '',
-        socio: formData.socio,
+        socio_id: formData.socio,
         fecha: formData.fecha,
         entradas: parseInt(formData.entradas) || 0,
         salidas: parseInt(value) || 0,
@@ -219,7 +216,8 @@ function App() {
         fletes: parseFloat(formData.fletes) || 0,
         comision: parseFloat(formData.comision) || 0,
         valor_animal: 0,
-        total: 0
+        total: 0,
+        socio: selectedSocio
       });
       setShowExitReasonsModal(true);
     }
@@ -227,14 +225,66 @@ function App() {
 
   const handleExitReasonsSave = async (exitReasons: ExitReasonEntry[]) => {
     setShowExitReasonsModal(false);
-    // Los detalles de salida se guardarán cuando se guarde el registro completo
+    // Exit details will be saved when the complete record is saved
+  };
+
+  const handleCreateNewSocio = async () => {
+    if (!newSocioData.nombre.trim()) {
+      alert('Por favor ingrese el nombre del socio');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      // Check if socio already exists
+      const existingSocio = await sociosService.findByName(newSocioData.nombre);
+      if (existingSocio) {
+        alert('Ya existe un socio con ese nombre');
+        return;
+      }
+
+      const nuevoSocio = await sociosService.create({
+        nombre: newSocioData.nombre.trim().toUpperCase(),
+        telefono: newSocioData.telefono.trim() || null,
+        email: newSocioData.email.trim() || null,
+        direccion: newSocioData.direccion.trim() || null,
+        activo: true
+      });
+
+      // Reload socios
+      const sociosData = await sociosService.getAll();
+      setSocios(sociosData);
+
+      // Select the new socio in the form
+      setFormData(prev => ({
+        ...prev,
+        socio: nuevoSocio.id
+      }));
+
+      // Clear and close modal
+      setNewSocioData({
+        nombre: '',
+        telefono: '',
+        email: '',
+        direccion: ''
+      });
+      setShowNewSocioModal(false);
+      
+      alert('Socio creado exitosamente');
+    } catch (error) {
+      console.error('Error creating socio:', error);
+      alert('Error al crear el socio');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.socio.trim()) {
-      alert('Por favor ingrese el nombre del socio');
+    if (!formData.socio) {
+      alert('Por favor seleccione un socio');
       return;
     }
 
@@ -242,7 +292,7 @@ function App() {
       setLoading(true);
 
       const nuevoRegistro = {
-        socio: formData.socio.trim().toUpperCase(),
+        socio_id: formData.socio,
         fecha: formData.fecha,
         entradas: parseFloat(formData.entradas) || 0,
         salidas: parseFloat(formData.salidas) || 0,
@@ -255,18 +305,12 @@ function App() {
         total: resultados.total
       };
 
-      const { data, error } = await supabase
-        .from('registros')
-        .insert([nuevoRegistro])
-        .select()
-        .single();
+      const data = await registrosService.create(nuevoRegistro);
 
-      if (error) throw error;
-
-      // Si hay salidas, necesitamos guardar los detalles
+      // If there are exits, need to save details
       const salidas = parseFloat(formData.salidas) || 0;
       if (salidas > 0) {
-        // Mostrar modal para especificar causas de salida
+        // Show modal to specify exit causes
         setSelectedRegistroForExits({
           ...data,
           kg_totales: data.kg_totales,
@@ -276,15 +320,15 @@ function App() {
         setShowExitReasonsModal(true);
       }
 
-      // Recargar registros
-      await loadRegistros();
+      // Reload data
+      await loadData();
 
-      // Si es el primer registro o no hay socio seleccionado, seleccionar este socio
+      // If it's the first record or no socio selected, select this socio
       if (!socioSeleccionado || registros.length === 0) {
-        setSocioSeleccionado(nuevoRegistro.socio);
+        setSocioSeleccionado(nuevoRegistro.socio_id);
       }
 
-      // Limpiar formulario
+      // Clear form
       setFormData({
         socio: '',
         fecha: '',
@@ -307,10 +351,10 @@ function App() {
     }
   };
 
-  const startEditing = (registro: Registro) => {
+  const startEditing = (registro: RegistroGanadero) => {
     setEditingId(registro.id);
     setEditingData({
-      socio: registro.socio,
+      socio_id: registro.socio_id,
       fecha: registro.fecha,
       entradas: registro.entradas,
       salidas: registro.salidas,
@@ -333,7 +377,7 @@ function App() {
       setLoading(true);
 
       const registroActualizado = {
-        socio: (editingData.socio || '').toString().toUpperCase(),
+        socio_id: editingData.socio_id,
         fecha: editingData.fecha,
         entradas: parseFloat(editingData.entradas?.toString() || '0') || 0,
         salidas: parseFloat(editingData.salidas?.toString() || '0') || 0,
@@ -343,15 +387,10 @@ function App() {
         comision: parseFloat(editingData.comision?.toString() || '0') || 0
       };
 
-      const { error } = await supabase
-        .from('registros')
-        .update(registroActualizado)
-        .eq('id', editingId);
+      await registrosService.update(editingId, registroActualizado);
 
-      if (error) throw error;
-
-      // Recargar registros
-      await loadRegistros();
+      // Reload data
+      await loadData();
       
       setEditingId(null);
       setEditingData({});
@@ -372,30 +411,7 @@ function App() {
     }));
   };
 
-  const limpiarTodosLosDatos = async () => {
-    if (window.confirm('¿Estás seguro de que quieres eliminar todos los registros? Esta acción no se puede deshacer.')) {
-      try {
-        setLoading(true);
-        
-        // Eliminar todos los detalles de salida primero
-        await supabase.from('salidas_detalle').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        
-        // Luego eliminar todos los registros
-        await supabase.from('registros').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        
-        setRegistros([]);
-        setSocioSeleccionado('');
-        alert('Todos los datos han sido eliminados');
-      } catch (error) {
-        console.error('Error deleting data:', error);
-        alert('Error al eliminar los datos');
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
-
-  const showExitDetails = async (registro: Registro) => {
+  const showExitDetails = async (registro: RegistroGanadero) => {
     try {
       const { data, error } = await supabase
         .from('salidas_detalle')
@@ -413,23 +429,15 @@ function App() {
     }
   };
 
-  const formatCurrency = (value: number) => {
-    return `$${Math.round(value).toLocaleString('es-CO')}`;
-  };
+  // Get selected socio data
+  const socioSeleccionadoData = socios.find(s => s.id === socioSeleccionado);
 
-  // Obtener lista única de socios para el selector
-  const sociosUnicos = [...new Set(registros
-    .filter(r => r && r.socio && typeof r.socio === 'string')
-    .map(r => r.socio)
-  )].sort();
-
-  // Filtrar registros del socio seleccionado
+  // Filter records for selected socio
   const registrosDelSocio = registros.filter(registro => 
-    registro && 
-    registro.socio === socioSeleccionado
+    registro && registro.socio_id === socioSeleccionado
   ).sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
 
-  // Estadísticas del socio seleccionado
+  // Statistics for selected socio
   const estadisticasDelSocio = {
     totalRegistros: registrosDelSocio.length,
     totalEntradas: registrosDelSocio.reduce((sum, reg) => sum + (reg.entradas || 0), 0),
@@ -442,7 +450,7 @@ function App() {
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Cargando registros...</p>
+          <p className="text-gray-600">Cargando datos...</p>
         </div>
       </div>
     );
@@ -459,11 +467,11 @@ function App() {
                 <Calculator className="w-8 h-8 text-white" />
               </div>
               <h1 className="text-3xl font-bold text-gray-800">
-                Registro Ganaderos 
+                Sistema de Registro Ganadero
               </h1>
             </div>
             <p className="text-gray-600 text-lg">
-              Sistema de Registro Ganadero
+              Gestión integral de socios y registros ganaderos
             </p>
             {isOffline && (
               <div className="mt-4 bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-lg flex items-center justify-center">
@@ -478,21 +486,9 @@ function App() {
                 {error}
               </div>
             )}
-            
-            {/* Botón para limpiar datos */}
-            <div className="mt-4">
-              {/*<button
-                onClick={limpiarTodosLosDatos}
-                disabled={loading}
-                className="bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 transition-colors font-medium shadow-lg hover:shadow-xl flex items-center mx-auto disabled:opacity-50"
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Eliminar Todos los Datos
-              </button>*/}
-            </div>
           </div>
 
-          {/* Selector de Socio */}
+          {/* Socio Selector */}
           <div className="mb-8 bg-white rounded-xl shadow-lg p-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
               <Search className="w-5 h-5 mr-2 text-emerald-600" />
@@ -510,26 +506,32 @@ function App() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
                 >
                   <option value="">Seleccionar socio...</option>
-                  {sociosUnicos.map(socio => (
-                    <option key={socio} value={socio}>
-                      {socio}
+                  {socios.map(socio => (
+                    <option key={socio.id} value={socio.id}>
+                      {socio.nombre}
                     </option>
                   ))}
                 </select>
               </div>
               
-              {socioSeleccionado && (
+              {socioSeleccionadoData && (
                 <div className="text-sm text-gray-600">
-                  <strong>Socio seleccionado:</strong> {socioSeleccionado}
+                  <strong>Socio:</strong> {socioSeleccionadoData.nombre}
                   <br />
                   <strong>Registros:</strong> {estadisticasDelSocio.totalRegistros}
+                  {socioSeleccionadoData.telefono && (
+                    <>
+                      <br />
+                      <strong>Teléfono:</strong> {socioSeleccionadoData.telefono}
+                    </>
+                  )}
                 </div>
               )}
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Formulario */}
+            {/* Form */}
             <div className="bg-white rounded-xl shadow-lg p-6">
               <h2 className="text-xl font-semibold text-gray-800 mb-6 flex items-center">
                 <Save className="w-5 h-5 mr-2 text-emerald-600" />
@@ -538,24 +540,33 @@ function App() {
               
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Socio *
-                  </label>
-                  <input
-                    type="text"
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Socio *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewSocioModal(true)}
+                      className="text-emerald-600 hover:text-emerald-700 text-sm flex items-center"
+                    >
+                      <UserPlus className="w-4 h-4 mr-1" />
+                      Nuevo Socio
+                    </button>
+                  </div>
+                  <select
                     name="socio"
                     value={formData.socio}
-                    onChange={(e) => {
-                      const { name, value } = e.target;
-                      setFormData(prev => ({
-                        ...prev,
-                        [name]: value.toUpperCase()
-                      }));
-                    }}
+                    onChange={handleInputChange}
                     required
-                    placeholder="Nombre del socio"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
-                  />
+                  >
+                    <option value="">Seleccionar socio...</option>
+                    {socios.map(socio => (
+                      <option key={socio.id} value={socio.id}>
+                        {socio.nombre}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -675,9 +686,9 @@ function App() {
               </form>
             </div>
 
-            {/* Resultados */}
+            {/* Results */}
             <div className="space-y-6">
-              {/* Cálculos en tiempo real */}
+              {/* Real-time calculations */}
               <div className="bg-white rounded-xl shadow-lg p-6">
                 <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
                   <BarChart3 className="w-5 h-5 mr-2 text-emerald-600" />
@@ -696,7 +707,7 @@ function App() {
                   
                   <div className="bg-green-50 p-4 rounded-lg">
                     <label className="block text-sm font-medium text-green-700 mb-1">
-                      Valor por Animal (Fórmula I: J/B)
+                      Valor por Animal
                     </label>
                     <div className="text-2xl font-bold text-green-900">
                       {`$${Math.round(resultados.valorAnimal).toLocaleString('es-CO')}`}
@@ -705,7 +716,7 @@ function App() {
                   
                   <div className="bg-purple-50 p-4 rounded-lg">
                     <label className="block text-sm font-medium text-purple-700 mb-1">
-                      Valor Total (Fórmula J: (E×F)+G/COUNT)
+                      Valor Total
                     </label>
                     <div className="text-2xl font-bold text-purple-900">
                       {`$${Math.round(resultados.total).toLocaleString('es-CO')}`}
@@ -714,20 +725,18 @@ function App() {
                       <div className="text-xs text-purple-600 mt-2 bg-purple-100 p-2 rounded">
                         <strong>Cálculo:</strong> ({Math.round(parseFloat(formData.kgTotales) || 0)} × {Math.round(parseFloat(formData.vrKilo) || 0)}) + ({Math.round(parseFloat(formData.fletes) || 0)} ÷ {resultados.divisorFlete})
                         <br />
-                        <strong>Flete dividido por:</strong> {resultados.divisorFlete} entrada(s) de {formData.socio} en {formData.fecha}
-                        <br />
-                        <strong>Nota:</strong> Al guardar, TODOS los registros del mismo socio y fecha se recalcularán automáticamente
+                        <strong>Flete dividido por:</strong> {resultados.divisorFlete} entrada(s) del socio en {formData.fecha}
                       </div>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Estadísticas del Socio Seleccionado */}
-              {socioSeleccionado && (
+              {/* Selected socio statistics */}
+              {socioSeleccionadoData && (
                 <div className="bg-white rounded-xl shadow-lg p-6">
                   <h3 className="text-lg font-semibold text-gray-800 mb-4">
-                    Estadísticas de {socioSeleccionado}
+                    Estadísticas de {socioSeleccionadoData.nombre}
                   </h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="text-center">
@@ -768,13 +777,13 @@ function App() {
             </div>
           </div>
 
-          {/* Tabla de registros del socio seleccionado */}
-          {socioSeleccionado && registrosDelSocio.length > 0 && (
+          {/* Records table for selected socio */}
+          {socioSeleccionadoData && registrosDelSocio.length > 0 && (
             <div className="mt-8 bg-white rounded-xl shadow-lg overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-800 flex items-center">
                   <Users className="w-5 h-5 mr-2 text-emerald-600" />
-                  Registros de {socioSeleccionado}
+                  Registros de {socioSeleccionadoData.nombre}
                   <span className="ml-2 text-sm text-gray-500">
                     ({registrosDelSocio.length} registros)
                   </span>
@@ -821,7 +830,7 @@ function App() {
                     <tbody className="bg-white divide-y divide-gray-100">
                       {registrosDelSocio.map((registro) => {
                         const entradasMismaFecha = registros.filter(r => 
-                          r && r.socio && r.socio === registro.socio && r.fecha === registro.fecha
+                          r && r.socio_id === registro.socio_id && r.fecha === registro.fecha
                         ).length;
                         
                         const isEditing = editingId === registro.id;
@@ -977,8 +986,8 @@ function App() {
             </div>
           )}
 
-          {/* Mensaje cuando no hay socio seleccionado */}
-          {!socioSeleccionado && registros.length > 0 && (
+          {/* Message when no socio selected */}
+          {!socioSeleccionado && socios.length > 0 && (
             <div className="mt-8 bg-white rounded-xl shadow-lg p-8 text-center">
               <div className="text-gray-400 mb-4">
                 <Users className="w-16 h-16 mx-auto" />
@@ -992,7 +1001,7 @@ function App() {
             </div>
           )}
 
-          {/* Mensaje cuando no hay registros */}
+          {/* Message when no records */}
           {registros.length === 0 && !loading && (
             <div className="mt-8 bg-white rounded-xl shadow-lg p-8 text-center">
               <div className="text-gray-400 mb-4">
@@ -1002,20 +1011,20 @@ function App() {
                 No hay registros aún
               </h3>
               <p className="text-gray-500">
-                Comienza agregando tu primer registro de socio para ver el historial aquí.
+                Comienza agregando tu primer registro para ver el historial aquí.
               </p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Modales */}
+      {/* Modals */}
       <ExitReasonsModal
         isOpen={showExitReasonsModal}
         onClose={() => setShowExitReasonsModal(false)}
         onSave={handleExitReasonsSave}
         totalExits={selectedRegistroForExits?.salidas || 0}
-        socio={selectedRegistroForExits?.socio || ''}
+        socio={selectedRegistroForExits?.socio?.nombre || ''}
         fecha={selectedRegistroForExits?.fecha || ''}
         registroId={selectedRegistroForExits?.id}
       />
@@ -1024,10 +1033,113 @@ function App() {
         isOpen={showExitDetailsModal}
         onClose={() => setShowExitDetailsModal(false)}
         exitDetails={selectedExitDetails}
-        socio={selectedRegistroForExits?.socio || ''}
+        socio={selectedRegistroForExits?.socio?.nombre || ''}
         fecha={selectedRegistroForExits?.fecha || ''}
         totalExits={selectedRegistroForExits?.salidas || 0}
       />
+
+      {/* New Socio Modal */}
+      {showNewSocioModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Nuevo Socio
+              </h3>
+              <button
+                onClick={() => setShowNewSocioModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Nombre *
+                  </label>
+                  <input
+                    type="text"
+                    value={newSocioData.nombre}
+                    onChange={(e) => setNewSocioData(prev => ({
+                      ...prev,
+                      nombre: e.target.value.toUpperCase()
+                    }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
+                    placeholder="Nombre del socio"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Teléfono
+                  </label>
+                  <input
+                    type="tel"
+                    value={newSocioData.telefono}
+                    onChange={(e) => setNewSocioData(prev => ({
+                      ...prev,
+                      telefono: e.target.value
+                    }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
+                    placeholder="Teléfono del socio"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={newSocioData.email}
+                    onChange={(e) => setNewSocioData(prev => ({
+                      ...prev,
+                      email: e.target.value
+                    }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
+                    placeholder="Email del socio"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Dirección
+                  </label>
+                  <input
+                    type="text"
+                    value={newSocioData.direccion}
+                    onChange={(e) => setNewSocioData(prev => ({
+                      ...prev,
+                      direccion: e.target.value
+                    }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
+                    placeholder="Dirección del socio"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex space-x-3">
+                <button
+                  onClick={() => setShowNewSocioModal(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleCreateNewSocio}
+                  disabled={!newSocioData.nombre.trim() || loading}
+                  className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                >
+                  {loading ? 'Creando...' : 'Crear Socio'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

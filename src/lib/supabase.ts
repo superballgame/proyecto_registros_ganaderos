@@ -75,10 +75,31 @@ export interface SalidaDetalle {
   created_at?: string;
 }
 
+export interface Venta {
+  id: string;
+  socio_id: string;
+  registro_id?: string;
+  fecha: string;
+  cantidad: number;
+  tipo: 'venta' | 'muerte' | 'robo';
+  valor_kilo: number;
+  total_kilos: number;
+  valor_total: number;
+  created_at?: string;
+  // Joined data
+  socio?: Socio;
+}
+
 export type CausaSalida = 'ventas' | 'muerte' | 'robo';
 
 export const causaSalidaLabels: Record<CausaSalida, string> = {
   ventas: 'Ventas',
+  muerte: 'Muerte',
+  robo: 'Robo'
+};
+
+export const tipoVentaLabels: Record<'venta' | 'muerte' | 'robo', string> = {
+  venta: 'Venta',
   muerte: 'Muerte',
   robo: 'Robo'
 };
@@ -364,5 +385,64 @@ export const registrosService = {
       socio_id: socioId,
       socio: socio.data
     })) as RegistroGanadero[];
+  }
+};
+
+export const ventasService = {
+  async getAll() {
+    try {
+      const { data, error } = await supabase
+        .from('ventas')
+        .select(`
+          *,
+          socio:socios(*)
+        `)
+        .order('fecha', { ascending: false });
+      
+      if (error) throw error;
+      return data as Venta[];
+    } catch (error) {
+      console.error('Error in ventasService.getAll:', error);
+      return [];
+    }
+  },
+
+  async create(venta: Omit<Venta, 'id' | 'created_at' | 'socio'>) {
+    const { data, error } = await supabase
+      .from('ventas')
+      .insert([venta])
+      .select(`
+        *,
+        socio:socios(*)
+      `)
+      .single();
+    
+    if (error) throw error;
+    return data as Venta;
+  },
+
+  async getBySocio(socioId: string) {
+    const { data, error } = await supabase
+      .from('ventas')
+      .select(`
+        *,
+        socio:socios(*)
+      `)
+      .eq('socio_id', socioId)
+      .order('fecha', { ascending: false });
+    
+    if (error) throw error;
+    return data as Venta[];
+  },
+
+  async getTotalVentasBySocio(socioId: string) {
+    const { data, error } = await supabase
+      .from('ventas')
+      .select('valor_total')
+      .eq('socio_id', socioId)
+      .eq('tipo', 'venta');
+    
+    if (error) throw error;
+    return (data || []).reduce((sum, venta) => sum + (venta.valor_total || 0), 0);
   }
 };

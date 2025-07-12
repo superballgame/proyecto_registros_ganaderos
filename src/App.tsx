@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Calculator, Save, BarChart3, AlertCircle, Search, Users, Calendar, Trash2, Edit3, Check, X, Eye, UserPlus } from 'lucide-react';
-import { supabase, RegistroGanadero, SalidaDetalle, Socio, Registro, sociosService, registrosService } from './lib/supabase';
-import ExitReasonsModal, { ExitReasonEntry } from './components/ExitReasonsModal';
+import { supabase, RegistroGanadero, SalidaDetalle, Socio, Registro, Venta, sociosService, registrosService, ventasService } from './lib/supabase';
+import ExitSelectionModal from './components/ExitSelectionModal';
+import SaleFormModal from './components/SaleFormModal';
 import ExitDetailsModal from './components/ExitDetailsModal';
 
 function App() {
   const [registros, setRegistros] = useState<(RegistroGanadero | Registro)[]>([]);
   const [socios, setSocios] = useState<Socio[]>([]);
+  const [ventas, setVentas] = useState<Venta[]>([]);
   const [formData, setFormData] = useState({
     socio: '',
     fecha: '',
@@ -31,10 +33,15 @@ function App() {
   const [error, setError] = useState<string>('');
   
   // Modal states
-  const [showExitReasonsModal, setShowExitReasonsModal] = useState(false);
+  const [showExitSelectionModal, setShowExitSelectionModal] = useState(false);
+  const [showSaleFormModal, setShowSaleFormModal] = useState(false);
   const [showExitDetailsModal, setShowExitDetailsModal] = useState(false);
   const [selectedExitDetails, setSelectedExitDetails] = useState<SalidaDetalle[]>([]);
   const [selectedRegistroForExits, setSelectedRegistroForExits] = useState<RegistroGanadero | null>(null);
+  const [pendingSaleData, setPendingSaleData] = useState<{
+    tipo: 'venta' | 'muerte' | 'robo';
+    cantidad: number;
+  } | null>(null);
 
   // New socio modal
   const [showNewSocioModal, setShowNewSocioModal] = useState(false);
@@ -73,6 +80,11 @@ function App() {
       const sociosData = await sociosService.getAll();
       console.log('Socios loaded:', sociosData.length);
       setSocios(sociosData);
+
+      // Load ventas
+      const ventasData = await ventasService.getAll();
+      console.log('Ventas loaded:', ventasData.length);
+      setVentas(ventasData);
 
       // Load registros
       const registrosData = await registrosService.getAll();
@@ -231,32 +243,75 @@ function App() {
       ...prev,
       salidas: value
     }));
+  };
 
-    // If there are exits, show modal to specify causes
-    if (parseInt(value) > 0) {
+  const handleShowExitModal = () => {
+    if (parseInt(formData.salidas) > 0 && formData.socio) {
       const selectedSocio = socios.find(s => s.id === formData.socio);
-      setSelectedRegistroForExits({
-        id: '',
-        socio_id: formData.socio,
-        fecha: formData.fecha,
-        entradas: parseInt(formData.entradas) || 0,
-        salidas: parseInt(value) || 0,
-        saldo: 0,
-        kg_totales: parseFloat(formData.kgTotales) || 0,
-        vr_kilo: parseFloat(formData.vrKilo) || 0,
-        fletes: parseFloat(formData.fletes) || 0,
-        comision: parseFloat(formData.comision) || 0,
-        valor_animal: 0,
-        total: 0,
-        socio: selectedSocio
-      });
-      setShowExitReasonsModal(true);
+      if (selectedSocio) {
+        setSelectedRegistroForExits({
+          id: '',
+          socio_id: formData.socio,
+          fecha: formData.fecha,
+          entradas: parseInt(formData.entradas) || 0,
+          salidas: parseInt(formData.salidas) || 0,
+          saldo: 0,
+          kg_totales: parseFloat(formData.kgTotales) || 0,
+          vr_kilo: parseFloat(formData.vrKilo) || 0,
+          fletes: parseFloat(formData.fletes) || 0,
+          comision: parseFloat(formData.comision) || 0,
+          valor_animal: 0,
+          total: 0,
+          socio: selectedSocio
+        });
+        setShowExitSelectionModal(true);
+      }
     }
   };
 
-  const handleExitReasonsSave = async (exitReasons: ExitReasonEntry[]) => {
-    setShowExitReasonsModal(false);
-    // Exit details will be saved when the complete record is saved
+  const handleExitTypeSelect = (tipo: 'venta' | 'muerte' | 'robo', cantidad: number) => {
+    setPendingSaleData({ tipo, cantidad });
+    
+    if (tipo === 'venta') {
+      setShowSaleFormModal(true);
+    } else {
+      // For muerte and robo, save directly without additional form
+      handleSaveExit(tipo, cantidad, 0, 0);
+    }
+  };
+
+  const handleSaleFormSave = (valorKilo: number, totalKilos: number) => {
+    if (pendingSaleData) {
+      handleSaveExit(pendingSaleData.tipo, pendingSaleData.cantidad, valorKilo, totalKilos);
+    }
+  };
+
+  const handleSaveExit = async (tipo: 'venta' | 'muerte' | 'robo', cantidad: number, valorKilo: number, totalKilos: number) => {
+    try {
+      if (!selectedRegistroForExits) return;
+
+      const valorTotal = tipo === 'venta' ? valorKilo * totalKilos : 0;
+
+      await ventasService.create({
+        socio_id: selectedRegistroForExits.socio_id,
+        registro_id: selectedRegistroForExits.id || undefined,
+        fecha: selectedRegistroForExits.fecha,
+        cantidad,
+        tipo,
+        valor_kilo: valorKilo,
+        total_kilos: totalKilos,
+        valor_total: valorTotal
+      });
+
+      // Reload data
+      await loadData();
+      
+      setPendingSaleData(null);
+      alert(`${tipo === 'venta' ? 'Venta' : tipo === 'muerte' ? 'Muerte' : 'Robo'} registrada exitosamente`);
+    } catch (error) {
+      console.error('Error saving exit:', error);
+      alert('Error al guardar el registro');
+    }
   };
 
   const handleCreateNewSocio = async () => {
@@ -340,16 +395,6 @@ function App() {
 
       // If there are exits, need to save details
       const salidas = parseFloat(formData.salidas) || 0;
-      if (salidas > 0) {
-        // Show modal to specify exit causes
-        setSelectedRegistroForExits({
-          ...data,
-          kg_totales: data.kg_totales,
-          vr_kilo: data.vr_kilo,
-          valor_animal: data.valor_animal
-        });
-        setShowExitReasonsModal(true);
-      }
 
       // Reload data
       await loadData();
@@ -463,6 +508,11 @@ function App() {
   // Get selected socio data
   const socioSeleccionadoData = socios.find(s => s.id === socioSeleccionado);
 
+  // Get total sales for selected socio
+  const totalVentasSocio = ventas
+    .filter(venta => venta.socio_id === socioSeleccionado && venta.tipo === 'venta')
+    .reduce((sum, venta) => sum + (venta.valor_total || 0), 0);
+
   // Filter records for selected socio
   const registrosDelSocio = registros.filter(registro => {
     if (!registro) return false;
@@ -479,7 +529,7 @@ function App() {
   const estadisticasDelSocio = {
     totalRegistros: registrosDelSocio.length,
     totalEntradas: registrosDelSocio.reduce((sum, reg) => sum + (reg.entradas || 0), 0),
-    totalSalidas: registrosDelSocio.reduce((sum, reg) => sum + (reg.salidas || 0), 0),
+    totalVentas: totalVentasSocio,
     totalAcumulado: registrosDelSocio.reduce((sum, reg) => sum + (reg.total || 0), 0)
   };
 
@@ -649,6 +699,15 @@ function App() {
                       step="1"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
                     />
+                    {parseInt(formData.salidas) > 0 && formData.socio && (
+                      <button
+                        type="button"
+                        onClick={handleShowExitModal}
+                        className="mt-2 w-full text-sm bg-blue-600 text-white py-1 px-2 rounded hover:bg-blue-700 transition-colors"
+                      >
+                        Especificar tipo de salida
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -794,11 +853,11 @@ function App() {
                       </div>
                     </div>
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-purple-600">
-                        {estadisticasDelSocio.totalSalidas}
+                      <div className="text-2xl font-bold text-green-600">
+                        {`$${Math.round(estadisticasDelSocio.totalVentas).toLocaleString('es-CO')}`}
                       </div>
                       <div className="text-sm text-gray-600">
-                        Total Salidas
+                        Venta Total
                       </div>
                     </div>
                     <div className="text-center">
@@ -1064,15 +1123,27 @@ function App() {
       </div>
 
       {/* Modals */}
-      <ExitReasonsModal
-        isOpen={showExitReasonsModal}
-        onClose={() => setShowExitReasonsModal(false)}
-        onSave={handleExitReasonsSave}
+      <ExitSelectionModal
+        isOpen={showExitSelectionModal}
+        onClose={() => setShowExitSelectionModal(false)}
+        onSelectType={handleExitTypeSelect}
         totalExits={selectedRegistroForExits?.salidas || 0}
         socio={selectedRegistroForExits?.socio?.nombre || 
                ('socio' in (selectedRegistroForExits || {}) ? (selectedRegistroForExits as Registro).socio : '')}
         fecha={selectedRegistroForExits?.fecha || ''}
-        registroId={selectedRegistroForExits?.id}
+      />
+
+      <SaleFormModal
+        isOpen={showSaleFormModal}
+        onClose={() => {
+          setShowSaleFormModal(false);
+          setPendingSaleData(null);
+        }}
+        onSave={handleSaleFormSave}
+        cantidad={pendingSaleData?.cantidad || 0}
+        socio={selectedRegistroForExits?.socio?.nombre || 
+               ('socio' in (selectedRegistroForExits || {}) ? (selectedRegistroForExits as Registro).socio : '')}
+        fecha={selectedRegistroForExits?.fecha || ''}
       />
 
       <ExitDetailsModal

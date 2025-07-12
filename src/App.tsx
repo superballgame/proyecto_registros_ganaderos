@@ -11,7 +11,7 @@ function App() {
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [formData, setFormData] = useState({
     socio: '',
-    fecha: '',
+    fecha: new Date().toISOString().split('T')[0], // Initialize with today's date
     entradas: '',
     salidas: '',
     kgTotales: '',
@@ -407,7 +407,7 @@ function App() {
       // Clear form
       setFormData({
         socio: '',
-        fecha: '',
+        fecha: new Date().toISOString().split('T')[0], // Reset to today's date
         entradas: '',
         salidas: '',
         kgTotales: '',

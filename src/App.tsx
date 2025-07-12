@@ -3,6 +3,7 @@ import { Calculator, Save, BarChart3, AlertCircle, Search, Users, Calendar, Tras
 import { supabase, RegistroGanadero, SalidaDetalle, Socio, Registro, Venta, sociosService, registrosService, ventasService } from './lib/supabase';
 import ExitSelectionModal from './components/ExitSelectionModal';
 import SaleFormModal from './components/SaleFormModal';
+import SaleFormModal from './components/SaleFormModal';
 import ExitDetailsModal from './components/ExitDetailsModal';
 
 function App() {
@@ -35,9 +36,14 @@ function App() {
   // Modal states
   const [showExitSelectionModal, setShowExitSelectionModal] = useState(false);
   const [showSaleFormModal, setShowSaleFormModal] = useState(false);
+  const [showSaleFormModal, setShowSaleFormModal] = useState(false);
   const [showExitDetailsModal, setShowExitDetailsModal] = useState(false);
   const [selectedExitDetails, setSelectedExitDetails] = useState<SalidaDetalle[]>([]);
   const [selectedRegistroForExits, setSelectedRegistroForExits] = useState<RegistroGanadero | null>(null);
+  const [pendingSaleData, setPendingSaleData] = useState<{
+    tipo: 'venta' | 'muerte' | 'robo';
+    cantidad: number;
+  } | null>(null);
   const [pendingSaleData, setPendingSaleData] = useState<{
     tipo: 'venta' | 'muerte' | 'robo';
     cantidad: number;
@@ -237,35 +243,128 @@ function App() {
     }));
   };
 
-  const handleSalidasChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setFormData(prev => ({
-      ...prev,
-      salidas: value
-    }));
+  const handleExitTypeSelect = async (tipo: 'venta' | 'muerte' | 'robo', cantidad: number) => {
+    setShowExitSelectionModal(false);
+    
+    if (tipo === 'venta') {
+      // Para ventas, abrir el formulario de venta
+      setPendingSaleData({ tipo, cantidad });
+      setShowSaleFormModal(true);
+    } else {
+      // Para muerte y robo, guardar directamente
+      await handleSaveExit(tipo, cantidad);
+    }
   };
 
-  const handleShowExitModal = () => {
-    if (parseInt(formData.salidas) > 0 && formData.socio) {
-      const selectedSocio = socios.find(s => s.id === formData.socio);
-      if (selectedSocio) {
-        setSelectedRegistroForExits({
-          id: '',
-          socio_id: formData.socio,
+  const handleSaleFormSave = async (valorKilo: number, totalKilos: number) => {
+    if (!pendingSaleData) return;
+    
+    setShowSaleFormModal(false);
+    
+    // Guardar la venta con los datos del formulario
+    await handleSaveExit(pendingSaleData.tipo, pendingSaleData.cantidad, valorKilo, totalKilos);
+    setPendingSaleData(null);
+  };
+
+  const handleSaveExit = async (tipo: 'venta' | 'muerte' | 'robo', cantidad: number, valorKilo?: number, totalKilos?: number) => {
+    try {
+      setLoading(true);
+
+      // Actualizar el formulario con las salidas
+      const updatedFormData = {
+        ...formData,
+        salidas: cantidad.toString()
+      };
+      setFormData(updatedFormData);
+
+      // Crear el registro principal
+      const nuevoRegistro = {
+        socio: formData.socio.trim().toUpperCase(),
+        fecha: formData.fecha,
+        entradas: parseFloat(formData.entradas) || 0,
+        salidas: cantidad,
+        saldo: (parseFloat(formData.entradas) || 0) - cantidad,
+        kg_totales: parseFloat(formData.kgTotales) || 0,
+        vr_kilo: parseFloat(formData.vrKilo) || 0,
+        fletes: parseFloat(formData.fletes) || 0,
+        comision: parseFloat(formData.comision) || 0,
+        valor_animal: 0, // Se calculará después
+        total: 0 // Se calculará después
+      };
+
+      const { data: registroData, error: registroError } = await supabase
+        .from('registros')
+        .insert([nuevoRegistro])
+        .select()
+        .single();
+
+      if (registroError) throw registroError;
+
+      // Si es una venta, crear el registro en la tabla ventas
+      if (tipo === 'venta' && valorKilo && totalKilos) {
+        // Buscar o crear el socio
+        let socio = await sociosService.findByName(formData.socio.trim().toUpperCase());
+        if (!socio) {
+          socio = await sociosService.create({
+            nombre: formData.socio.trim().toUpperCase(),
+            activo: true
+          });
+        }
+
+        const ventaData = {
+          socio_id: socio.id,
+          registro_id: registroData.id,
           fecha: formData.fecha,
-          entradas: parseInt(formData.entradas) || 0,
-          salidas: parseInt(formData.salidas) || 0,
-          saldo: 0,
-          kg_totales: parseFloat(formData.kgTotales) || 0,
-          vr_kilo: parseFloat(formData.vrKilo) || 0,
-          fletes: parseFloat(formData.fletes) || 0,
-          comision: parseFloat(formData.comision) || 0,
-          valor_animal: 0,
-          total: 0,
-          socio: selectedSocio
-        });
-        setShowExitSelectionModal(true);
+          cantidad: cantidad,
+          tipo: tipo,
+          valor_kilo: valorKilo,
+          total_kilos: totalKilos,
+          valor_total: valorKilo * totalKilos
+        };
+
+        const { error: ventaError } = await supabase
+          .from('ventas')
+          .insert([ventaData]);
+
+        if (ventaError) throw ventaError;
       }
+
+      // Crear el detalle de salida
+      const salidaDetalle = {
+        registro_id: registroData.id,
+        socio: formData.socio.trim().toUpperCase(),
+        fecha: formData.fecha,
+        cantidad: cantidad,
+        causa: tipo === 'venta' ? 'ventas' : tipo
+      };
+
+      const { error: detalleError } = await supabase
+        .from('salidas_detalle')
+        .insert([salidaDetalle]);
+
+      if (detalleError) throw detalleError;
+
+      // Recargar registros
+      await loadRegistros();
+
+      // Limpiar formulario
+      setFormData({
+        socio: '',
+        fecha: new Date().toISOString().split('T')[0],
+        entradas: '',
+        salidas: '',
+        kgTotales: '',
+        vrKilo: '',
+        fletes: '',
+        comision: ''
+      });
+
+      alert(`${tipo === 'venta' ? 'Venta' : tipo} registrada exitosamente.`);
+    } catch (error) {
+      console.error('Error saving exit:', error);
+      alert('Error al guardar la salida');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -662,11 +761,32 @@ function App() {
                     Fecha *
                   </label>
                   <input
-                    type="date"
-                    name="fecha"
-                    value={formData.fecha}
+                    value=""
+                    onClick={() => {
+                      if (!formData.socio || !formData.fecha) {
+                        alert('Por favor ingrese primero el socio y la fecha');
+                        return;
+                      }
+                      setSelectedRegistroForExits({
+                        id: '',
+                        socio: formData.socio,
+                        fecha: formData.fecha,
+                        entradas: parseInt(formData.entradas) || 0,
+                        salidas: 0,
+                        saldo: 0,
+                        kg_totales: parseFloat(formData.kgTotales) || 0,
+                        vr_kilo: parseFloat(formData.vrKilo) || 0,
+                        fletes: parseFloat(formData.fletes) || 0,
+                        comision: parseFloat(formData.comision) || 0,
+                        valor_animal: 0,
+                        total: 0
+                      });
+                      setShowExitSelectionModal(true);
+                    }}
+                    readOnly
                     onChange={handleInputChange}
                     required
+                    placeholder="Clic para especificar salidas"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
                   />
                 </div>
@@ -1136,13 +1256,23 @@ function App() {
       <SaleFormModal
         isOpen={showSaleFormModal}
         onClose={() => {
+      <ExitSelectionModal
+        isOpen={showExitSelectionModal}
+        onClose={() => setShowExitSelectionModal(false)}
+        onSelectType={handleExitTypeSelect}
+        socio={selectedRegistroForExits?.socio?.nombre || 
+               ('socio' in (selectedRegistroForExits || {}) ? (selectedRegistroForExits as Registro).socio : '')}
+      />
+
+      <SaleFormModal
+        isOpen={showSaleFormModal}
+        onClose={() => {
           setShowSaleFormModal(false);
           setPendingSaleData(null);
         }}
         onSave={handleSaleFormSave}
         cantidad={pendingSaleData?.cantidad || 0}
-        socio={selectedRegistroForExits?.socio?.nombre || 
-               ('socio' in (selectedRegistroForExits || {}) ? (selectedRegistroForExits as Registro).socio : '')}
+        socio={selectedRegistroForExits?.socio || ''}
         fecha={selectedRegistroForExits?.fecha || ''}
       />
 

@@ -6,7 +6,6 @@ interface ExitSelectionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectType: (type: 'venta' | 'muerte' | 'robo', cantidad: number) => void;
-  totalExits: number;
   socio: string;
   fecha: string;
 }
@@ -15,12 +14,19 @@ const ExitSelectionModal: React.FC<ExitSelectionModalProps> = ({
   isOpen,
   onClose,
   onSelectType,
-  totalExits,
   socio,
   fecha
 }) => {
   const [selectedType, setSelectedType] = useState<'venta' | 'muerte' | 'robo' | null>(null);
-  const [cantidad, setCantidad] = useState<number>(totalExits);
+  const [cantidad, setCantidad] = useState<number>(1);
+
+  // Reset state when modal opens
+  React.useEffect(() => {
+    if (isOpen) {
+      setSelectedType(null);
+      setCantidad(1);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -78,20 +84,6 @@ const ExitSelectionModal: React.FC<ExitSelectionModalProps> = ({
         </div>
 
         <div className="p-6">
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Cantidad de animales
-            </label>
-            <input
-              type="number"
-              min="1"
-              max={totalExits}
-              value={cantidad}
-              onChange={(e) => setCantidad(parseInt(e.target.value) || 0)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
-            />
-          </div>
-
           <div className="space-y-3 mb-6">
             <p className="text-sm font-medium text-gray-700 mb-3">
               Selecciona el tipo de salida:
@@ -105,19 +97,35 @@ const ExitSelectionModal: React.FC<ExitSelectionModalProps> = ({
                   selectedType === tipo ? 'ring-2 ring-emerald-500' : ''
                 }`}
               >
-                <div className="flex items-center">
+                <div className="flex items-center justify-between">
                   {getIconForType(tipo)}
                   <span className="ml-3 font-medium text-gray-900">
                     {tipoVentaLabels[tipo]}
                   </span>
                   {selectedType === tipo && (
-                    <div className="ml-auto">
+                    <div>
                       <div className="w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
                         <div className="w-2 h-2 bg-white rounded-full"></div>
                       </div>
                     </div>
                   )}
                 </div>
+                {selectedType === tipo && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Cantidad de animales
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={cantidad}
+                      onChange={(e) => setCantidad(parseInt(e.target.value) || 1)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
+                      placeholder="Cantidad"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -136,11 +144,3 @@ const ExitSelectionModal: React.FC<ExitSelectionModalProps> = ({
             >
               Continuar
             </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default ExitSelectionModal;

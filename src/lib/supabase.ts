@@ -391,6 +391,7 @@ export const registrosService = {
 export const ventasService = {
   async getAll() {
     try {
+      console.log('Fetching ventas from Supabase...');
       const { data, error } = await supabase
         .from('ventas')
         .select(`
@@ -399,7 +400,16 @@ export const ventasService = {
         `)
         .order('fecha', { ascending: false });
       
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching ventas:', error);
+        // If table doesn't exist yet, return empty array
+        if (error.code === '42P01') {
+          console.log('Ventas table does not exist yet');
+          return [];
+        }
+        throw error;
+      }
+      console.log('Ventas fetched successfully:', data?.length || 0);
       return data as Venta[];
     } catch (error) {
       console.error('Error in ventasService.getAll:', error);
@@ -408,9 +418,20 @@ export const ventasService = {
   },
 
   async create(venta: Omit<Venta, 'id' | 'created_at' | 'socio'>) {
+    // Validate date before sending to database
+    if (!venta.fecha || venta.fecha === '') {
+      throw new Error('Fecha is required and cannot be empty');
+    }
+    
+    // Ensure fecha is in YYYY-MM-DD format
+    const fechaFormatted = new Date(venta.fecha).toISOString().split('T')[0];
+    
     const { data, error } = await supabase
       .from('ventas')
-      .insert([venta])
+      .insert([{
+        ...venta,
+        fecha: fechaFormatted
+      }])
       .select(`
         *,
         socio:socios(*)
@@ -422,27 +443,49 @@ export const ventasService = {
   },
 
   async getBySocio(socioId: string) {
-    const { data, error } = await supabase
-      .from('ventas')
-      .select(`
-        *,
-        socio:socios(*)
-      `)
-      .eq('socio_id', socioId)
-      .order('fecha', { ascending: false });
-    
-    if (error) throw error;
-    return data as Venta[];
+    try {
+      const { data, error } = await supabase
+        .from('ventas')
+        .select(`
+          *,
+          socio:socios(*)
+        `)
+        .eq('socio_id', socioId)
+        .order('fecha', { ascending: false });
+      
+      if (error) {
+        // If table doesn't exist yet, return empty array
+        if (error.code === '42P01') {
+          return [];
+        }
+        throw error;
+      }
+      return data as Venta[];
+    } catch (error) {
+      console.error('Error in ventasService.getBySocio:', error);
+      return [];
+    }
   },
 
   async getTotalVentasBySocio(socioId: string) {
-    const { data, error } = await supabase
-      .from('ventas')
-      .select('valor_total')
-      .eq('socio_id', socioId)
-      .eq('tipo', 'venta');
-    
-    if (error) throw error;
-    return (data || []).reduce((sum, venta) => sum + (venta.valor_total || 0), 0);
+    try {
+      const { data, error } = await supabase
+        .from('ventas')
+        .select('valor_total')
+        .eq('socio_id', socioId)
+        .eq('tipo', 'venta');
+      
+      if (error) {
+        // If table doesn't exist yet, return 0
+        if (error.code === '42P01') {
+          return 0;
+        }
+        throw error;
+      }
+      return (data || []).reduce((sum, venta) => sum + (venta.valor_total || 0), 0);
+    } catch (error) {
+      console.error('Error in ventasService.getTotalVentasBySocio:', error);
+      return 0;
+    }
   }
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Cow, Users, TrendingUp, DollarSign, Plus, Eye } from 'lucide-react';
+import { Cog as Cow, Users, TrendingUp, DollarSign, Plus, Eye } from 'lucide-react';
 import { sociosService, registrosService, ventasService, salidasDetalleService } from './lib/supabase';
 import ExitSelectionModal from './components/ExitSelectionModal';
 import SaleFormModal from './components/SaleFormModal';
